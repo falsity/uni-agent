@@ -1,0 +1,11 @@
+{
+    "dockerfile_lines": [],
+    "graphs": {
+        "uni_agent": "./src/uni_agent/agent.py:agent"
+    },
+    "python_version": "3.13",
+    "env": ".env",
+    "dependencies": [
+      "."
+    ]
+  }
