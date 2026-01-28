@@ -54,6 +54,43 @@ For the verification message when no clarification is needed:
 - Keep the message concise and professional
 """
 
+supervisor_prompt = """
+You are a supervisor. The conversation ALREADY has MCP job results stored. Decide by the last user message:
+
+Last user message: {last_user_message}
+
+- If the user has a CLEAR NEW SEARCH REQUEST (e.g. new city, new job title, new keywords, new location, new requirements that would require a fresh search), respond route="job_search" (will clarify and run MCP search).
+- If it is a follow-up on existing results (e.g. refine, filter, reorder, "按薪资排序", "只保留25k以上的", "去掉本科以上的", questions about the jobs, or any operation that works with existing results), respond route="optimize". Optimize reuses existing results only; it does NOT re-search.
+
+Examples of CLEAR NEW SEARCH REQUEST:
+- "我想找北京的agent开发相关工作" (new location requirement)
+- "帮我搜索一下Python开发职位" (new job title/keywords)
+- "找一下远程工作的机会" (new work type requirement)
+- "我想换个城市，找上海的职位" (explicit new search)
+
+Examples of OPTIMIZE (work with existing results):
+- "按薪资从高到低重新排一下"
+- "只保留25k以上的"
+- "去掉本科以上的"
+- "这些职位的工作地点都在哪里？"
+- "给我总结一下这些职位"
+
+Output JSON: {{"route": "job_search" or "optimize"}}
+"""
+
+optimize_recommendations_prompt = """
+You help the user optimize and refine the job recommendations. The raw MCP job search results are provided in the "Raw MCP job results" block below (when present).
+
+CRITICAL: Do NOT call any tools. Use ONLY the Raw MCP job results block as the source of job data. You cannot re-search.
+
+Your tasks:
+1. Answer the user's questions about the jobs using the Raw MCP job results block.
+2. Reorder, filter, or re-summarize the job list by the user's criteria (salary, location, experience) and present an optimized display.
+
+When presenting jobs, use markdown: [Job Title](jobDetail_URL) - Company (salary). jobDetail and other fields come from the Raw MCP job results block.
+Match the user's language (Chinese/English). Be concise and directly address the user's request.
+"""
+
 search_jobs_agent_prompt_with_mcp = """
 You are a helpful assistant that helps the user search for jobs.
 

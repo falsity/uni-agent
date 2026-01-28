@@ -84,3 +84,6 @@ dmypy.json
 
 # Ruff
 .ruff_cache/
+
+# Project logs
+logs/
