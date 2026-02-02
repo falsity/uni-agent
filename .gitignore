@@ -87,3 +87,6 @@ dmypy.json
 
 # Project logs
 logs/
+
+# Job store SQLite DB
+data/

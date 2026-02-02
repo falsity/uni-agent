@@ -16,10 +16,20 @@ dependencies = [
     "langchain-mcp-adapters>=0.2.1",
     "langgraph-checkpoint-postgres>=3.0.3",
     "psycopg[binary,pool]>=3.2.0",
+    "httpx[socks]>=0.27.0",
 ]
 
-[project.scripts]
-uni-agent = "uni_agent:main"
+[project.optional-dependencies]
+test = ["pytest>=8.0.0", "pytest-timeout>=2.3.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 180
+# Exit on first failure; full traceback
+addopts = "-x --tb=long"
+markers = [
+    "integration: marks tests that need DB/LLM (deselect with -m 'not integration')",
+]
 
 [build-system]
 requires = ["uv_build>=0.9.17,<0.10.0"]

@@ -1,7 +1,12 @@
 import asyncio
+import os
+
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 _client = None
+
+# Deployable: set MCP_JOBS_URL in env (e.g. http://host:6000/mcp)
+MCP_JOBS_URL = os.environ.get("MCP_JOBS_URL", "http://192.168.0.201:6000/mcp")
 
 
 def get_mcp_jobs_client() -> MultiServerMCPClient:
@@ -12,7 +17,7 @@ def get_mcp_jobs_client() -> MultiServerMCPClient:
             {
                 "mcp_jobs": {
                     "transport": "http",
-                    "url": "http://192.168.0.201:6000/mcp",
+                    "url": MCP_JOBS_URL,
                 }
             }
         )

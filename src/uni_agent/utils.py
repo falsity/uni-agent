@@ -1,6 +1,6 @@
-from datetime import datetime
 import logging
 import re
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -17,15 +17,15 @@ def detect_language(text: str) -> str:
     """
     if not text:
         return "auto"
-    
+
     # Check for Chinese characters (CJK unified ideographs)
-    chinese_pattern = re.compile(r'[\u4e00-\u9fff]+')
+    chinese_pattern = re.compile(r"[\u4e00-\u9fff]+")
     has_chinese = bool(chinese_pattern.search(text))
-    
+
     # Count Chinese vs English characters
     chinese_chars = len(chinese_pattern.findall(text))
-    english_chars = len(re.findall(r'[a-zA-Z]', text))
-    
+    english_chars = len(re.findall(r"[a-zA-Z]", text))
+
     # If text contains Chinese characters, likely Chinese
     if has_chinese:
         return "zh"
@@ -37,7 +37,7 @@ def detect_language(text: str) -> str:
         return "auto"
 
 
-def get_state_from_checkpoint(checkpointer, config: dict):
+def get_state_from_checkpoint(checkpointer, config: dict) -> dict:
     """Get state from checkpoint by config.
 
     Args:

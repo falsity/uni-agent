@@ -78,6 +78,22 @@ Examples of OPTIMIZE (work with existing results):
 Output JSON: {{"route": "job_search" or "optimize"}}
 """
 
+optimize_retrieval_prompt = """
+You are an agentic RAG retrieval planner. Given the user's last message (and optional job brief), output structured retrieval parameters for querying a job store. Do NOT output natural language; output only the structured fields below.
+
+User's last message: {last_user_message}
+Job brief (context): {job_brief}
+
+Extract:
+1. salary_min_k: If user asks for minimum salary (e.g. "25k以上", "只保留25k以上的", "月薪两万五以上"), set to that number in thousands (25). Otherwise null.
+2. salary_max_k: If user gives an upper bound or range (e.g. "20-30k"), set max to 30. Otherwise null.
+3. sort_by_salary_desc: True if user wants "按薪资从高到低" or "salary high to low" or "按工资排序".
+4. semantic_query: Short query for vector search over jobs. Use keywords from user (e.g. "agent 北京", "Python 开发"). If user only asks to filter/sort without new keywords, leave null to use full list.
+5. limit: How many jobs to retrieve (10-100). Use 60-80 when user asks for "只保留25k以上的" or filter; use 50 when semantic_query is set; use 80 when user says "全部" or "更多".
+
+Respond with the structured schema only (salary_min_k, salary_max_k, sort_by_salary_desc, semantic_query, limit).
+"""
+
 optimize_recommendations_prompt = """
 You help the user optimize and refine the job recommendations. The raw MCP job search results are provided in the "Raw MCP job results" block below (when present).
 
