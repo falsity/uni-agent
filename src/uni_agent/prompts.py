@@ -32,20 +32,8 @@ If you need to ask a question, follow these guidelines:
 - Don't ask for unnecessary information, or information that the user has already provided. If you can see that the user has already provided the information, do not ask for it again
 - Focus on the most critical missing information that would significantly impact job search results
 
-Respond in valid JSON format with these exact keys:
-"need_clarification": boolean,
-"question": "<question to ask the user to clarify the job search requirements>",
-"verification": "<verification message that we will start job search>"
-
-If you need to ask a clarifying question, return:
-"need_clarification": true,
-"question": "<your clarifying question>",
-"verification": ""
-
-If you do not need to ask a clarifying question, return:
-"need_clarification": false,
-"question": "",
-"verification": "<acknowledgement message that you will now start searching for jobs based on the provided information>"
+Respond in the following format:
+{format_instructions}
 
 For the verification message when no clarification is needed:
 - Acknowledge that you have sufficient information to proceed
@@ -75,7 +63,7 @@ Examples of OPTIMIZE (work with existing results):
 - "这些职位的工作地点都在哪里？"
 - "给我总结一下这些职位"
 
-Output JSON: {{"route": "job_search" or "optimize"}}
+{format_instructions}
 """
 
 optimize_retrieval_prompt = """
@@ -91,7 +79,7 @@ Extract:
 4. semantic_query: Short query for vector search over jobs. Use keywords from user (e.g. "agent 北京", "Python 开发"). If user only asks to filter/sort without new keywords, leave null to use full list.
 5. limit: How many jobs to retrieve (10-100). Use 60-80 when user asks for "只保留25k以上的" or filter; use 50 when semantic_query is set; use 80 when user says "全部" or "更多".
 
-Respond with the structured schema only (salary_min_k, salary_max_k, sort_by_salary_desc, semantic_query, limit).
+{format_instructions}
 """
 
 optimize_recommendations_prompt = """

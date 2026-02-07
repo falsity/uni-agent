@@ -4,9 +4,11 @@ from datetime import datetime
 import logging
 import os
 import sys
+from logging.handlers import TimedRotatingFileHandler
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.messages.utils import trim_messages, count_tokens_approximately
+from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.postgres import PostgresSaver
@@ -43,24 +45,36 @@ from uni_agent.tools.mcp_jobs import get_mcp_tools
 from uni_agent.tools.tavily_search import tavily_search
 from uni_agent.tools.think_tool import job_search_think_tool
 
-# Configure logger to include full path and line number, and write to logs/agent_YYYYMMDD_HHMMSS.log
+# Configure logger: append to logs/agent.log, rotate daily at midnight, keep last 7 days
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
-LOG_FILE = os.path.join(
-    LOG_DIR, f"agent_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+LOG_FILE = os.path.join(LOG_DIR, "agent.log")
+LOG_RETENTION_DAYS = 7  # current day + 6 rotated files = 7 days total
+
+file_handler = TimedRotatingFileHandler(
+    LOG_FILE,
+    when="midnight",
+    interval=1,
+    backupCount=LOG_RETENTION_DAYS - 1,  # keep 6 backups so total is 7 days
+    encoding="utf-8",
+)
+file_handler.suffix = "%Y-%m-%d"
+file_handler.setFormatter(
+    logging.Formatter("%(asctime)s - %(levelname)s - %(pathname)s:%(lineno)d - %(message)s")
 )
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(pathname)s:%(lineno)d - %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_FILE, encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
+    handlers=[file_handler, logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger(__name__)
-logger.info("Logging initialized. Log file: %s", LOG_FILE)
+logger.info(
+    "Logging initialized. Log file: %s (daily rotate at midnight, keep %s days)",
+    LOG_FILE,
+    LOG_RETENTION_DAYS,
+)
 
 # --- Config (deployable via env) ---
 CHAT_BASE_URL = os.environ.get(
@@ -90,6 +104,11 @@ model = ChatOpenAI(
     api_key=OPENAI_API_KEY,
 )
 llm_with_tools = model.bind_tools(tools)
+
+# PydanticOutputParser for structured LLM output (same pattern as draft/parser.py; handles ```json ... ```)
+clarify_parser = PydanticOutputParser(pydantic_object=ClarifyJobDetail)
+retrieval_parser = PydanticOutputParser(pydantic_object=OptimizeRetrievalParams)
+supervisor_parser = PydanticOutputParser(pydantic_object=SupervisorDecision)
 
 
 # --- Helpers ---
@@ -132,10 +151,13 @@ def classify_job_detail(
     """Classify job detail and determine if clarification is needed."""
     messages = state.get("messages")
     truncated = _truncate_messages_for_prompt(messages)
-    structured_output_model = model.with_structured_output(ClarifyJobDetail)
-    response = structured_output_model.invoke(
-        [HumanMessage(content=clarify_job_detail_prompt.format(messages=truncated))]
+    # Same pattern as draft/parser.py: prompt with format_instructions -> model -> parser.invoke(output)
+    prompt_content = clarify_job_detail_prompt.format(
+        messages=truncated,
+        format_instructions=clarify_parser.get_format_instructions(),
     )
+    output = model.invoke([HumanMessage(content=prompt_content)])
+    response = clarify_parser.invoke(output)
     # Store the response in state for conditional routing
     if response.need_clarify:
         return Command(
@@ -191,15 +213,18 @@ def _last_user_content(messages: list) -> str:
 def _get_retrieval_params_agentic(last_user: str, job_brief: str) -> OptimizeRetrievalParams:
     """
     Agentic RAG: use LLM to parse user message into retrieval params (salary filter, sort, semantic query, limit).
-    Replaces hardcoded regex with intent-based retrieval.
+    Same pattern as draft/parser.py: prompt with format_instructions -> model -> parser.invoke(output).
     """
-    structured = model.with_structured_output(OptimizeRetrievalParams)
-    prompt = optimize_retrieval_prompt.format(
+    prompt_content = optimize_retrieval_prompt.format(
         last_user_message=last_user or "(none)",
         job_brief=job_brief or "(none)",
+        format_instructions=retrieval_parser.get_format_instructions(),
     )
-    out = structured.invoke([HumanMessage(content=prompt)])
-    return out if isinstance(out, OptimizeRetrievalParams) else OptimizeRetrievalParams()
+    output = model.invoke([HumanMessage(content=prompt_content)])
+    try:
+        return retrieval_parser.invoke(output)
+    except Exception:
+        return OptimizeRetrievalParams()
 
 
 def _get_optimize_job_text(state, store, user_id: str, messages: list) -> str:
@@ -515,17 +540,13 @@ def supervisor(
     messages = state.get("messages", [])
     last_user = _last_user_content(messages)[:800]
 
-    # Use LLM to determine if user has a clear new search request
-    structured = model.with_structured_output(SupervisorDecision)
-    out = structured.invoke(
-        [
-            HumanMessage(
-                content=supervisor_prompt.format(
-                    last_user_message=last_user or "(none)"
-                )
-            )
-        ]
+    # Same pattern as draft/parser.py: prompt with format_instructions -> model -> parser.invoke(output)
+    prompt_content = supervisor_prompt.format(
+        last_user_message=last_user or "(none)",
+        format_instructions=supervisor_parser.get_format_instructions(),
     )
+    output = model.invoke([HumanMessage(content=prompt_content)])
+    out = supervisor_parser.invoke(output)
 
     # Route based on LLM decision
     next_node = (
@@ -663,3 +684,7 @@ def run_demo() -> None:
             config=config,
         )
         logger.info("Third invoke done. Result keys: %s", list(result.keys()))
+
+
+if __name__ == "__main__":
+    run_demo()

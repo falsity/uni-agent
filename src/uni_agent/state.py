@@ -3,7 +3,7 @@ from typing import Annotated, Literal, Optional, Sequence
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 from langgraph.graph import MessagesState
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class JobState(MessagesState):
@@ -34,11 +34,24 @@ class ClarifyJobDetail(BaseModel):
         description="Whether the job detail needs to be clarified"
     )
     question: str = Field(
+        default="",
         description="Question to clarify the job detail, if the job detail is not clear, ask the user for more information"
     )
     verification: str = Field(
+        default="",
         description="Verfiy message that the necessary information for finding a position has been provided"
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_none_to_empty_str(cls, data):
+        """Coerce null from LLM JSON to empty string so str fields pass validation."""
+        if not isinstance(data, dict):
+            return data
+        for key in ("question", "verification"):
+            if key in data and data[key] is None:
+                data = {**data, key: ""}
+        return data
 
 
 class OptimizeRetrievalParams(BaseModel):
