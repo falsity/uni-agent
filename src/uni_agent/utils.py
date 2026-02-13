@@ -1,13 +1,109 @@
+"""
+Shared utilities: date, language, checkpoint, and node helpers (message/tool).
+Node helpers are used by chat_agent and job_agent without importing agent.
+"""
+
 import logging
 import re
 from datetime import datetime
+from typing import Any
+
+from langchain_core.messages import HumanMessage
+from langchain_core.messages.utils import trim_messages
 
 logger = logging.getLogger(__name__)
 
 
+# ---------- Message / tool helpers (for nodes) ----------
+def truncate_messages_list(msgs: list, max_tokens: int = 12000) -> list:
+    """Truncate messages to recent max_tokens (approximate). Used by chat/job nodes."""
+    if not msgs:
+        return msgs
+    return trim_messages(
+        msgs,
+        max_tokens=max_tokens,
+        token_counter="approximate",
+        strategy="last",
+        include_system=True,
+        start_on="human",
+    )
+
+
+def parse_tool_call(tool_call: Any) -> tuple:
+    """Return (tool_name, tool_args, tool_id) from a tool_call dict or object."""
+    if isinstance(tool_call, dict):
+        return (
+            tool_call.get("name"),
+            tool_call.get("args", {}),
+            tool_call.get("id"),
+        )
+    return (
+        getattr(tool_call, "name", None),
+        getattr(tool_call, "args", {}),
+        getattr(tool_call, "id", None),
+    )
+
+
+def has_tool_calls(msg: Any) -> bool:
+    """True if message has non-empty tool_calls (e.g. AIMessage)."""
+    return (
+        hasattr(msg, "tool_calls")
+        and msg.tool_calls
+        and len(msg.tool_calls) > 0
+    )
+
+
+def tool_result_to_content(result: Any, max_chars: int | None = None) -> str:
+    """Normalize tool result to string; optionally truncate."""
+    content = result if isinstance(result, str) else str(result)
+    if max_chars and len(content) > max_chars:
+        content = content[:max_chars] + "\n\n[truncated for context limit]"
+    return content
+
+
+def config_user_id(config: dict | None) -> str:
+    """Get user_id from config.configurable; fallback to thread_id."""
+    if config is None:
+        return ""
+    cfg = config.get("configurable", {}) if isinstance(config, dict) else {}
+    return (cfg.get("user_id") or cfg.get("thread_id") or "").strip()
+
+
+def message_content_to_str(content: Any) -> str:
+    """Normalize message content to string (str or list of parts)."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict) and "text" in part:
+                parts.append(part["text"])
+            else:
+                parts.append(str(part))
+        return " ".join(parts).strip()
+    return str(content).strip()
+
+
+def last_user_content(messages: list) -> str:
+    """Return content of last HumanMessage in messages."""
+    for m in reversed(messages):
+        if isinstance(m, HumanMessage):
+            raw = getattr(m, "content", "") or ""
+            return message_content_to_str(raw)
+    return ""
+
+
+# ---------- Date / language / checkpoint ----------
+
+
 def get_today_str() -> str:
-    """Get current date in a human-readable format."""
-    return datetime.now().strftime("%a %b %-d, %Y")
+    """Get current date in a human-readable format (portable: no %-d)."""
+    dt = datetime.now()
+    return dt.strftime("%a %b ") + str(dt.day) + ", " + dt.strftime("%Y")
 
 
 def detect_language(text: str) -> str:

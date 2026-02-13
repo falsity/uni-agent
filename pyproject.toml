@@ -21,18 +21,11 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=8.0.0", "pytest-timeout>=2.3.0"]
-# Pin compatible langgraph versions to avoid thread_ttl / API mismatch (0.7.21 + runtime 0.23.x).
-langgraph-dev = [
-    "langgraph-cli[inmem]",
-    "langgraph-api==0.6.22",
-    "langgraph-runtime-inmem>=0.21.0,<0.22.0",
-]
 
-[tool.uv]
-# Force these versions when resolving (e.g. with --extra langgraph-dev).
-constraint-dependencies = [
-    "langgraph-api==0.6.22",
-    "langgraph-runtime-inmem>=0.21.0,<0.22.0",
+[dependency-groups]
+dev = [
+    "langgraph-cli[inmem]",
+    "ipykernel>=6.0.0",
 ]
 
 [tool.pytest.ini_options]

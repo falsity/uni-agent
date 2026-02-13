@@ -7,8 +7,7 @@ import json
 import re
 from typing import Any
 
-# Max jobs to keep per user per full update (used in parse fallback and store_adapter)
-MAX_JOBS_PER_USER = 500
+from uni_agent.store.store_adapter import MAX_JOBS_PER_USER
 
 
 def _extract_json_from_mcp_content_parts(mcp_raw: str) -> str | None:

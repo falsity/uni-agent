@@ -17,13 +17,15 @@ class JobState(MessagesState):
     has_job_results: Optional[bool]
     # Number of jobs written to store in mcp_jobs_tool_call (for E2E verification)
     jobs_stored_count: Optional[int]
+    # Internal routing in job_agent: set by classify_job_detail to "mcp_jobs_tool_call" or "__end__"
+    classify_goto: Optional[str]
 
 
 class SupervisorDecision(BaseModel):
     """Supervisor routing: which sub-agent to invoke."""
 
-    route: Literal["job_search", "optimize"] = Field(
-        description="job_search: run job search (classify + MCP). optimize: user already has job results and wants to refine/optimize recommendations via LLM dialogue."
+    route: Literal["job_search", "optimize", "llm_call"] = Field(
+        description="job_search: run job search (classify + MCP). optimize: user already has job results and wants to refine/optimize recommendations. llm_call: user asks a general question, greeting, or off-topic; answer directly without job search or optimization."
     )
 
 
@@ -39,7 +41,7 @@ class ClarifyJobDetail(BaseModel):
     )
     verification: str = Field(
         default="",
-        description="Verfiy message that the necessary information for finding a position has been provided"
+        description="Verification message that the necessary information for finding a position has been provided"
     )
 
     @model_validator(mode="before")

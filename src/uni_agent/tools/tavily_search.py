@@ -161,16 +161,16 @@ def tavily_search(
     topic: Literal["general", "news", "finance"] = "general",
     include_raw_content: bool = True,
 ) -> dict:
-    """Run a web search using the Tavily API.
+    """Run a web search using the Tavily API. Use when the user needs up-to-date or external information.
 
     Args:
-        query (str): The search query.
-        max_results (int): The maximum number of results to return. Defaults to 1.
-        topic (Literal["general", "news", "finance"]): The topic of the search. Defaults to "general".
-        include_raw_content (bool): Whether to include the raw content of the search results. Defaults to True.
+        query (str): Search query. Must reflect only the current user request (same intent and language).
+        max_results (int): Maximum number of results. Defaults to 1.
+        topic (Literal["general", "news", "finance"]): Topic of the search. Defaults to "general".
+        include_raw_content (bool): Whether to include raw content. Defaults to True.
 
     Returns:
-        dict: A dictionary containing the search results.
+        dict: Search results.
     """
     result = tavily_client.search(query, max_results=max_results)
     processed_results = process_search_results(result)

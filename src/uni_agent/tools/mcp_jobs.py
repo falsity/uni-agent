@@ -1,8 +1,10 @@
 import asyncio
+import logging
 import os
 
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
+logger = logging.getLogger(__name__)
 _client = None
 
 # Deployable: set MCP_JOBS_URL in env (e.g. http://host:6000/mcp)
@@ -51,12 +53,8 @@ async def get_mcp_tools():
             # If tools is not a list or iterable, return empty list
             return []
     except asyncio.TimeoutError:
-        # Timeout - server may be unavailable
-        import logging
-        logging.warning("Timeout getting MCP tools - server may be unavailable")
+        logger.warning("Timeout getting MCP tools - server may be unavailable")
         return []
     except Exception as e:
-        # Log error and return empty list
-        import logging
-        logging.warning(f"Error getting MCP tools: {e}")
+        logger.warning("Error getting MCP tools: %s", e)
         return []

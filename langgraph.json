@@ -1,11 +1,11 @@
 {
-    "dockerfile_lines": [],
-    "graphs": {
-        "uni_agent": "./src/uni_agent/agent.py:agent"
-    },
-    "python_version": "3.13",
-    "env": ".env",
-    "dependencies": [
-      "."
-    ]
-  }
+  "dockerfile_lines": ["ENV UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple/"],
+  "graphs": {
+    "agent": "./src/uni_agent/agent.py:agent",
+    "chat_agent": "./src/uni_agent/agent.py:chat_agent",
+    "job_agent": "./src/uni_agent/agent.py:job_agent"
+  },
+  "python_version": "3.13",
+  "env": ".env",
+  "dependencies": ["."]
+}
