@@ -1,13 +1,22 @@
 """
 Chat sub-agent: general Q&A, greetings, off-topic; can use tools.
-Self-contained: config, nodes, graph construction. Exports compiled graph.
+Uses short-term memory (recent messages), long-term memory (store RAG for work preferences),
+and Mem0 for cross-session user memory (persistent storage + retrieval-augmented context).
+Self-contained: config, nodes, graph construction. Exports build_chat_agent(store, checkpointer).
+When used as a subgraph, parent graph's checkpointer persists state; when standalone, pass checkpointer.
 """
 
-from langchain_core.messages import SystemMessage, ToolMessage
+from typing import TYPE_CHECKING
+
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
+from langgraph.store.base import BaseStore
 from langchain_openai import ChatOpenAI
+
+if TYPE_CHECKING:
+    from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from uni_agent.config import (
     CHAT_BASE_URL,
@@ -16,13 +25,24 @@ from uni_agent.config import (
     SAFE_MESSAGE_TOKENS,
     TOOL_RESULT_MAX_CHARS,
 )
+from uni_agent.memory.mem0_adapter import (
+    add_messages_to_mem0,
+    get_mem0_context_for_query,
+    is_mem0_available,
+)
 from uni_agent.prompts import llm_call_prompt
 from uni_agent.state import JobState
+from uni_agent.store.store_adapter import (
+    get_user_memories_by_search,
+    get_user_preference,
+)
 from uni_agent.tools.datetime_tool import get_current_datetime
 from uni_agent.tools.tavily_search import tavily_search
 from uni_agent.tools.think_tool import job_search_think_tool
 from uni_agent.utils import (
+    config_user_id,
     has_tool_calls,
+    last_user_content,
     parse_tool_call,
     tool_result_to_content,
     truncate_messages_list,
@@ -35,26 +55,54 @@ _model = ChatOpenAI(
     base_url=CHAT_BASE_URL,
     api_key=OPENAI_API_KEY,
 )
-_model_with_tools = _model.bind_tools(_tools)
 _tool_map = {t.name: t for t in _tools}
+
+
+def _build_rag_context(store: BaseStore | None, user_id: str | None, query: str) -> str:
+    """Build RAG context: Mem0 (cross-session) first, then job preference + store user_memory."""
+    if not user_id:
+        return ""
+    parts = []
+    # Mem0: cross-session persistent memory (external storage + semantic search)
+    if is_mem0_available():
+        mem0_ctx = get_mem0_context_for_query(user_id, query or "用户偏好 工作偏好")
+        if mem0_ctx.strip():
+            parts.append("[Mem0 cross-session user memory]\n" + mem0_ctx.strip())
+    # Store: job preference summary + user_memory (existing RAG)
+    if store:
+        pref = get_user_preference(store, user_id)
+        if pref:
+            parts.append(f"[Stored job preference summary]\n{pref}")
+        memories = get_user_memories_by_search(store, user_id, query=query or "工作偏好", limit=5)
+        if memories:
+            parts.append("[Stored work preferences / facts]\n" + "\n".join(memories))
+    if not parts:
+        return ""
+    return "\n\n---\n\n".join(parts)
 
 
 # ===== NODES =====
 def _llm_call(
-    state: JobState, config: RunnableConfig, *, store=None  # noqa: ARG001
+    state: JobState, config: RunnableConfig, *, store: BaseStore | None = None
 ) -> dict:
-    """LLM with tools; may return tool_calls."""
-    messages = truncate_messages_list(
-        state.get("messages", []), max_tokens=SAFE_MESSAGE_TOKENS
-    )
-    response = _model_with_tools.invoke(
-        [SystemMessage(content=llm_call_prompt)] + messages, config=config
+    """LLM with tools; injects RAG context (work preferences) when store/user_id available."""
+    messages = state.get("messages", [])
+    truncated = truncate_messages_list(messages, max_tokens=SAFE_MESSAGE_TOKENS)
+    user_id = config_user_id(config)
+    last_user = last_user_content(truncated)
+    rag_context = _build_rag_context(store, user_id, last_user)
+    system_content = llm_call_prompt
+    if rag_context.strip():
+        system_content += "\n\n---\nRetrieved work preferences / memory (use to answer preference questions):\n\n" + rag_context
+    model_with_tools = _model.bind_tools(_tools)
+    response = model_with_tools.invoke(
+        [SystemMessage(content=system_content)] + truncated, config=config
     )
     return {"messages": [response]}
 
 
 def _tool_node(
-    state: JobState, config: RunnableConfig, *, store=None  # noqa: ARG001
+    state: JobState, config: RunnableConfig, *, store: BaseStore | None = None
 ) -> dict:
     """Execute tool calls from last AIMessage; return ToolMessages."""
     messages = state.get("messages", [])
@@ -95,24 +143,68 @@ def _tool_node(
     return {"messages": tool_messages}
 
 
+def _mem0_persist_node(state: JobState, config: RunnableConfig) -> dict:
+    """
+    Persist last user+assistant turn to Mem0 for cross-session memory.
+    Runs when LLM finishes without tool calls; Mem0 infers facts from the exchange.
+    """
+    user_id = config_user_id(config)
+    if not user_id or not is_mem0_available():
+        return {}
+    messages = state.get("messages", []) or []
+    # Collect last HumanMessage and the AIMessage that follows (this turn)
+    turn: list = []
+    for m in reversed(messages):
+        if isinstance(m, AIMessage):
+            if not turn:
+                turn.append(m)
+            else:
+                break
+        elif isinstance(m, HumanMessage) and len(turn) == 1:
+            turn.append(m)
+            break
+    if len(turn) == 2:
+        # Order: human first, then assistant
+        turn = [turn[1], turn[0]]
+        add_messages_to_mem0(user_id, turn)
+    return {}
+
+
 def _route_after_llm(state: JobState) -> str:
-    """Route to tool_node if last message has tool_calls, else END."""
+    """Route to tool_node if last message has tool_calls, else to mem0_persist then END."""
     messages = state.get("messages", [])
     if not messages or not has_tool_calls(messages[-1]):
-        return "__end__"
+        return "mem0_persist"
     return "tool_node"
 
 
 # ===== GRAPH CONSTRUCTION =====
-_builder = StateGraph(JobState)
-_builder.add_node("llm_call", _llm_call)
-_builder.add_node("tool_node", _tool_node)
-_builder.add_edge(START, "llm_call")
-_builder.add_conditional_edges(
-    "llm_call",
-    _route_after_llm,
-    {"tool_node": "tool_node", "__end__": END},
-)
-_builder.add_edge("tool_node", "llm_call")
+def build_chat_agent(
+    store: BaseStore | None = None,
+    checkpointer: "BaseCheckpointSaver | None" = None,
+) -> CompiledStateGraph:
+    """
+    Build and compile the chat subgraph with optional store and checkpointer.
 
-chat_agent: CompiledStateGraph = _builder.compile()
+    - store: for long-term memory (RAG over user_preferences + user_memory).
+    - checkpointer: for persisting conversation by thread_id. Omit when chat is used as
+      a subgraph (parent graph's checkpointer handles state); pass when running standalone.
+    - Mem0: cross-session user memory (retrieve before LLM, persist after each turn).
+    """
+    builder = StateGraph(JobState)
+    builder.add_node("llm_call", _llm_call)
+    builder.add_node("tool_node", _tool_node)
+    builder.add_node("mem0_persist", _mem0_persist_node)
+    builder.add_edge(START, "llm_call")
+    builder.add_conditional_edges(
+        "llm_call",
+        _route_after_llm,
+        {"tool_node": "tool_node", "mem0_persist": "mem0_persist"},
+    )
+    builder.add_edge("tool_node", "llm_call")
+    builder.add_edge("mem0_persist", END)
+    return builder.compile(store=store, checkpointer=checkpointer)
+
+
+# Default no-store, no-checkpointer graph for backward compat (e.g. tests)
+chat_agent: CompiledStateGraph = build_chat_agent(store=None)

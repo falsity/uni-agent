@@ -5,10 +5,8 @@ from uni_agent.store.store_adapter import (
     get_job_count,
     get_jobs_by_search,
     get_jobs_for_prompt,
-    get_user_preference,
     save_job_results_async,
     save_job_results_sync,
-    save_user_preference_sync,
 )
 
 __all__ = [
@@ -17,8 +15,6 @@ __all__ = [
     "get_job_count",
     "get_jobs_for_prompt",
     "get_jobs_by_search",
-    "get_user_preference",
     "save_job_results_sync",
     "save_job_results_async",
-    "save_user_preference_sync",
 ]

@@ -26,11 +26,12 @@ from uni_agent.config import (
     OPENAI_MODEL,
     get_store_index_config,
 )
-from uni_agent.graphs import build_job_agent, chat_agent as chat_agent_graph
+from uni_agent.graphs.chat_agent import build_chat_agent
+from uni_agent.graphs import build_job_agent
 from uni_agent.prompts import supervisor_prompt, supervisor_prompt_no_results
 from uni_agent.state import JobState, SupervisorDecision
 from uni_agent.store.store_adapter import get_job_count
-from uni_agent.utils import config_user_id, last_user_content
+from uni_agent.utils import config_user_id, last_assistant_content, last_user_content
 
 # ============ Logging ============
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -74,12 +75,16 @@ supervisor_parser = PydanticOutputParser(pydantic_object=SupervisorDecision)
 
 
 def _supervisor_next_node(
-    has_results: bool, last_user: str, config: RunnableConfig
+    has_results: bool,
+    last_user: str,
+    last_assistant: str,
+    config: RunnableConfig,
 ) -> str:
     """Return next_agent from supervisor decision (classify_job_detail | optimize_recommendations | llm_call)."""
     if not has_results:
         prompt_content = supervisor_prompt_no_results.format(
             last_user_message=last_user or "(none)",
+            last_assistant_message=last_assistant or "(none)",
             format_instructions=supervisor_parser.get_format_instructions(),
         )
         output = model.invoke([HumanMessage(content=prompt_content)], config=config)
@@ -97,18 +102,34 @@ def _supervisor_next_node(
     }.get(out.route, "llm_call")
 
 
+def _is_clarification_reply(last_assistant: str, last_user: str) -> bool:
+    """True if last assistant asked something and user gave a short reply (continue job flow)."""
+    if not (last_assistant and last_user):
+        return False
+    a, u = last_assistant.strip(), last_user.strip()
+    if any(m in a for m in ("请问", "具体", "哪里", "哪种", "?")) and len(u) <= 200:
+        return True
+    return False
+
+
 def supervisor(
     state: JobState, config: RunnableConfig, *, store: BaseStore | None = None
 ) -> dict:
-    """Route to chat_agent or job_agent based on LLM decision."""
+    """Route to chat_agent or job_agent. When no results and last turn was clarification Q&A,
+    go to job_agent so user's reply (e.g. in chat) continues the flow without mis-route.
+    """
     has_results = state.get("has_job_results") or bool(
         (state.get("mcp_job_results") or "").strip()
     )
     user_id = config_user_id(config)
     if not has_results and user_id and store:
         has_results = get_job_count(store, user_id) > 0
-    last_user = last_user_content(state.get("messages", []))[:800]
-    next_node = _supervisor_next_node(has_results, last_user, config)
+    messages = state.get("messages", [])
+    last_user = last_user_content(messages)[:800]
+    last_assistant = last_assistant_content(messages)[:500]
+    if not has_results and _is_clarification_reply(last_assistant, last_user):
+        return {"next_agent": "classify_job_detail"}
+    next_node = _supervisor_next_node(has_results, last_user, last_assistant, config)
     return {"next_agent": next_node}
 
 
@@ -119,9 +140,10 @@ def build_agent(store: BaseStore, checkpointer: PostgresSaver) -> CompiledStateG
     Chat and job subgraphs are self-contained modules; job subgraph needs store.
     """
     job_graph = build_job_agent(store)
+    chat_graph = build_chat_agent(store)
     builder = StateGraph(JobState)
     builder.add_node("supervisor", supervisor)
-    builder.add_node("chat_agent", chat_agent_graph)
+    builder.add_node("chat_agent", chat_graph)
     builder.add_node("job_agent", job_graph)
 
     builder.add_edge(START, "supervisor")
@@ -158,17 +180,30 @@ def agent(config: RunnableConfig | None = None) -> CompiledStateGraph:
 
 
 def chat_agent(config: RunnableConfig | None = None) -> CompiledStateGraph:
-    """Standalone chat subgraph (no supervisor)."""
-    return chat_agent_graph
+    """Standalone chat subgraph with store (RAG) and checkpointer (thread persistence)."""
+    store_ref = PostgresStore.from_conn_string(DB_URI, index=get_store_index_config())
+    store = store_ref.__enter__()
+    checkpointer_ref = PostgresSaver.from_conn_string(DB_URI)
+    checkpointer = checkpointer_ref.__enter__()
+    store.setup()
+    checkpointer.setup()
+    graph = build_chat_agent(store=store, checkpointer=checkpointer)
+    graph._store_ref = store_ref
+    graph._checkpointer_ref = checkpointer_ref
+    return graph
 
 
 def job_agent(config: RunnableConfig | None = None) -> CompiledStateGraph:
-    """Standalone job subgraph; creates store and builds job graph."""
+    """Standalone job subgraph with store and checkpointer (thread persistence)."""
     store_ref = PostgresStore.from_conn_string(DB_URI, index=get_store_index_config())
     store = store_ref.__enter__()
+    checkpointer_ref = PostgresSaver.from_conn_string(DB_URI)
+    checkpointer = checkpointer_ref.__enter__()
     store.setup()
-    graph = build_job_agent(store)
+    checkpointer.setup()
+    graph = build_job_agent(store, checkpointer=checkpointer)
     graph._store_ref = store_ref
+    graph._checkpointer_ref = checkpointer_ref
     return graph
 
 
@@ -203,7 +238,7 @@ def run_demo() -> None:
         result = graph.invoke(
             {
                 "messages": result.get("messages", [])
-                + [HumanMessage(content="我希望寻找北京的agent 开发相关工作, 其他条件不限")]
+                + [HumanMessage(content="我希望寻找北京的ai agent 开发相关工作, 其他条件不限")]
             },
             config=run_config,
         )

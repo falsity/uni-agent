@@ -97,6 +97,16 @@ def last_user_content(messages: list) -> str:
     return ""
 
 
+def last_assistant_content(messages: list) -> str:
+    """Return content of last AIMessage (for supervisor: detect clarification Q&A)."""
+    from langchain_core.messages import AIMessage
+    for m in reversed(messages):
+        if isinstance(m, AIMessage):
+            raw = getattr(m, "content", "") or ""
+            return message_content_to_str(raw)
+    return ""
+
+
 # ---------- Date / language / checkpoint ----------
 
 

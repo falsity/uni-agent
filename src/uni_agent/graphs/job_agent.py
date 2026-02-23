@@ -1,12 +1,14 @@
 """
 Job sub-agent: classify intent, MCP job search, optimize/filter results.
-Self-contained: config, nodes, helpers, graph. Exports build_job_agent(store).
+Self-contained: config, nodes, helpers, graph. Exports build_job_agent(store, checkpointer).
+When used as subgraph, parent's checkpointer persists state; when standalone, pass checkpointer.
 """
 
 import asyncio
 import json
 import logging
 import traceback
+from typing import TYPE_CHECKING
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.messages.utils import trim_messages, count_tokens_approximately
@@ -16,6 +18,9 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.store.base import BaseStore
+
+if TYPE_CHECKING:
+    from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from uni_agent.config import (
     CHAT_BASE_URL,
@@ -43,6 +48,7 @@ from uni_agent.store.store_adapter import (
     get_jobs_by_search,
     get_jobs_for_prompt,
     save_job_results_async,
+    save_user_memory_sync,
     save_user_preference_sync,
 )
 from uni_agent.tools.mcp_jobs import get_mcp_tools
@@ -244,7 +250,7 @@ def classify_job_detail(
         }
     user_id = config_user_id(config)
     if user_id and store is not None and (response.verification or "").strip():
-        save_user_preference_sync(store, user_id, response.verification.strip())
+        save_user_memory_sync(store, user_id, response.verification.strip())
     return {
         "messages": [AIMessage(content=response.verification)],
         "classify_goto": "mcp_jobs_tool_call",
@@ -384,10 +390,14 @@ def optimize_recommendations(
 
 
 # ===== GRAPH =====
-def build_job_agent(store: BaseStore) -> CompiledStateGraph:
+def build_job_agent(
+    store: BaseStore | None = None,
+    checkpointer: "BaseCheckpointSaver | None" = None,
+) -> CompiledStateGraph:
     """
     Build and compile the job subgraph: entry -> classify | optimize;
-    classify -> mcp_jobs_tool_call | END.
+    classify -> mcp_jobs_tool_call | END (when need_clarify, END so user can reply in next turn;
+    supervisor will route the reply back to job_agent).
     """
     builder = StateGraph(JobState)
     builder.add_node("classify_job_detail", classify_job_detail)
@@ -415,4 +425,8 @@ def build_job_agent(store: BaseStore) -> CompiledStateGraph:
     )
     builder.add_edge("mcp_jobs_tool_call", END)
     builder.add_edge("optimize_recommendations", END)
-    return builder.compile(store=store)
+    return builder.compile(store=store, checkpointer=checkpointer)
+
+
+# Default no-store graph for backward compat (e.g. tests)
+job_agent: CompiledStateGraph = build_job_agent(store=None)

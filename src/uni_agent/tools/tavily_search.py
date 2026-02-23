@@ -20,7 +20,7 @@ from uni_agent.utils import get_today_str
 load_dotenv()
 tavily_client = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
 summarization_model = ChatOpenAI(
-    model="Qwen/Qwen3-8B", base_url="http://192.168.0.201:9000/v1"
+    model="Qwen/Qwen3-8B", base_url="http://192.168.0.201:8000/v1"
 )
 
 
