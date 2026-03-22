@@ -48,8 +48,6 @@ from uni_agent.store.store_adapter import (
     get_jobs_by_search,
     get_jobs_for_prompt,
     save_job_results_async,
-    save_user_memory_sync,
-    save_user_preference_sync,
 )
 from uni_agent.tools.mcp_jobs import get_mcp_tools
 from uni_agent.tools.think_tool import job_search_think_tool
@@ -248,9 +246,6 @@ def classify_job_detail(
             "messages": [AIMessage(content=response.question)],
             "classify_goto": "__end__",
         }
-    user_id = config_user_id(config)
-    if user_id and store is not None and (response.verification or "").strip():
-        save_user_memory_sync(store, user_id, response.verification.strip())
     return {
         "messages": [AIMessage(content=response.verification)],
         "classify_goto": "mcp_jobs_tool_call",

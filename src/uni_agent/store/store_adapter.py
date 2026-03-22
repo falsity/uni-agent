@@ -1,10 +1,8 @@
 """
-LangGraph store adapter for job results and user preferences.
+LangGraph store adapter for job results.
 
 - Jobs: namespace ("jobs", user_id); keys "0".."N-1" (job index), "meta" (count, updated_at).
   Value per job: {title, company, description_snippet, ...}. Indexed for embedding search.
-- User preferences: namespace ("user_preferences", user_id), key "summary".
-  Value: {summary_text, updated_at}. Full update after classify_job_detail (no clarify).
 """
 
 from datetime import datetime, timezone
@@ -18,95 +16,10 @@ MAX_JOBS_PER_USER = 500
 JOBS_NAMESPACE_PREFIX = "jobs"
 JOBS_META_KEY = "meta"
 
-PREF_NAMESPACE_PREFIX = "user_preferences"
-PREF_SUMMARY_KEY = "summary"
-
-# User memory for chat RAG: multiple entries per user, keyed by index, value has "content" for embedding
-USER_MEMORY_NAMESPACE_PREFIX = "user_memory"
-USER_MEMORY_META_KEY = "meta"
-MAX_USER_MEMORY_ENTRIES = 200
-
 
 def _jobs_namespace(user_id: str) -> tuple[str, ...]:
     """Namespace for a user's job list: ("jobs", user_id)."""
     return (JOBS_NAMESPACE_PREFIX, user_id)
-
-
-def _pref_namespace(user_id: str) -> tuple[str, ...]:
-    """Namespace for a user's job preference summary: ("user_preferences", user_id)."""
-    return (PREF_NAMESPACE_PREFIX, user_id)
-
-
-def _user_memory_namespace(user_id: str) -> tuple[str, ...]:
-    """Namespace for a user's chat memory entries: ("user_memory", user_id)."""
-    return (USER_MEMORY_NAMESPACE_PREFIX, user_id)
-
-
-def save_user_preference_sync(store: BaseStore, user_id: str, summary_text: str) -> None:
-    """
-    Full update: write user job preference summary (e.g. verification from classify_job_detail).
-    Call after classify_job_detail when need_clarify is false, before mcp_jobs_tool_call.
-    """
-    if not user_id or not summary_text:
-        return
-    now = datetime.now(timezone.utc).isoformat()
-    store.put(_pref_namespace(user_id), PREF_SUMMARY_KEY, {"summary_text": summary_text, "updated_at": now})
-
-
-def get_user_preference(store: BaseStore, user_id: str) -> Optional[str]:
-    """Read user job preference summary for job_brief / prompt injection; None if not set."""
-    if not user_id:
-        return None
-    item = store.get(_pref_namespace(user_id), PREF_SUMMARY_KEY)
-    v = getattr(item, "value", None) if item else None
-    if not isinstance(v, dict):
-        return None
-    return (v.get("summary_text") or "").strip() or None
-
-
-def save_user_memory_sync(store: BaseStore, user_id: str, content: str) -> None:
-    """
-    Append one memory entry for chat RAG (work preferences, etc.).
-    Uses namespace (user_memory, user_id); keys "0".."N-1" (round-robin overwrite when full).
-    """
-    if not user_id or not (content or "").strip():
-        return
-    ns = _user_memory_namespace(user_id)
-    meta_item = store.get(ns, USER_MEMORY_META_KEY)
-    meta = meta_item.value if meta_item and isinstance(meta_item.value, dict) else {}
-    next_index = int(meta.get("next_index", 0))
-    key = str(next_index % MAX_USER_MEMORY_ENTRIES)
-    now = datetime.now(timezone.utc).isoformat()
-    store.put(ns, key, {"content": content.strip(), "updated_at": now})
-    store.put(
-        ns,
-        USER_MEMORY_META_KEY,
-        {"next_index": next_index + 1, "updated_at": now},
-    )
-
-
-def get_user_memories_by_search(
-    store: BaseStore, user_id: str, query: str, limit: int = 5
-) -> list[str]:
-    """
-    Semantic search over user memory for RAG. Returns list of content strings.
-    """
-    if not user_id:
-        return []
-    q = (query or "").strip() or "工作偏好 求职偏好"
-    results = store.search(_user_memory_namespace(user_id), query=q, limit=limit * 2)
-    out = []
-    seen = set()
-    for r in results:
-        if not (hasattr(r, "value") and isinstance(r.value, dict)):
-            continue
-        content = (r.value.get("content") or "").strip()
-        if content and content not in seen:
-            seen.add(content)
-            out.append(content)
-            if len(out) >= limit:
-                break
-    return out
 
 
 def _job_value_for_store(job: dict[str, Any], index: int) -> dict[str, Any]:

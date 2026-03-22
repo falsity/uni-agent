@@ -6,12 +6,12 @@ Entry points: agent(), chat_agent(), job_agent() for langgraph.json.
 import logging
 import os
 import sys
-from datetime import datetime
+import re
 from logging.handlers import TimedRotatingFileHandler
 
 from langchain_core.messages import HumanMessage
 from langchain_core.output_parsers import PydanticOutputParser
-from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables import RunnableConfig, RunnableLambda
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import END, START, StateGraph
@@ -71,7 +71,15 @@ model = ChatOpenAI(
     base_url=CHAT_BASE_URL,
     api_key=OPENAI_API_KEY,
 )
+
+
+def strip_junk(msg):
+    text = msg.content if hasattr(msg, "content") else str(msg)
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    return match.group() if match else text
+
 supervisor_parser = PydanticOutputParser(pydantic_object=SupervisorDecision)
+robust_supervisor_parser = RunnableLambda(strip_junk) | supervisor_parser
 
 
 def _supervisor_next_node(
@@ -88,14 +96,15 @@ def _supervisor_next_node(
             format_instructions=supervisor_parser.get_format_instructions(),
         )
         output = model.invoke([HumanMessage(content=prompt_content)], config=config)
-        out = supervisor_parser.invoke(output)
+        out = robust_supervisor_parser.invoke(output)
         return "classify_job_detail" if out.route == "job_search" else "llm_call"
     prompt_content = supervisor_prompt.format(
         last_user_message=last_user or "(none)",
+        last_assistant_message=last_assistant or "(none)",
         format_instructions=supervisor_parser.get_format_instructions(),
     )
     output = model.invoke([HumanMessage(content=prompt_content)], config=config)
-    out = supervisor_parser.invoke(output)
+    out = robust_supervisor_parser.invoke(output)
     return {
         "job_search": "classify_job_detail",
         "optimize": "optimize_recommendations",
@@ -205,82 +214,3 @@ def job_agent(config: RunnableConfig | None = None) -> CompiledStateGraph:
     graph._store_ref = store_ref
     graph._checkpointer_ref = checkpointer_ref
     return graph
-
-
-# ============ Demos ============
-def run_demo() -> None:
-    """Run three-step demo with context manager for store/checkpointer."""
-    store_index = get_store_index_config()
-    with (
-        PostgresStore.from_conn_string(DB_URI, index=store_index) as store,
-        PostgresSaver.from_conn_string(DB_URI) as checkpointer,
-    ):
-        store.setup()
-        checkpointer.setup()
-        graph = build_agent(store, checkpointer)
-        run_config: RunnableConfig = {
-            "configurable": {
-                "thread_id": datetime.now().strftime("%Y%m%d%H%M%S"),
-                "user_id": "1",
-            }
-        }
-        result = graph.invoke(
-            {
-                "messages": [
-                    HumanMessage(
-                        content="我是一名有3年经验的软件工程师，我想找一份工作，我擅长golang和python, 请帮我搜索一下agent开发相关职位"
-                    )
-                ]
-            },
-            config=run_config,
-        )
-        logger.info("First invoke done. Result keys: %s", list(result.keys()))
-        result = graph.invoke(
-            {
-                "messages": result.get("messages", [])
-                + [HumanMessage(content="我希望寻找北京的ai agent 开发相关工作, 其他条件不限")]
-            },
-            config=run_config,
-        )
-        logger.info("Second invoke done. Result keys: %s", list(result.keys()))
-        result = graph.invoke(
-            {
-                "messages": [
-                    HumanMessage(content="按薪资从高到低重新排一下，只保留25k以上的")
-                ]
-            },
-            config=run_config,
-        )
-        logger.info("Third invoke done. Result keys: %s", list(result.keys()))
-
-
-async def stream_messages_demo() -> None:
-    """Stream LLM tokens for typewriter effect (graph.astream stream_mode='messages')."""
-    store_index = get_store_index_config()
-    with (
-        PostgresStore.from_conn_string(DB_URI, index=store_index) as store,
-        PostgresSaver.from_conn_string(DB_URI) as checkpointer,
-    ):
-        store.setup()
-        checkpointer.setup()
-        graph = build_agent(store, checkpointer)
-        run_config: RunnableConfig = {
-            "configurable": {
-                "thread_id": datetime.now().strftime("%Y%m%d%H%M%S"),
-                "user_id": "1",
-            }
-        }
-        inputs = {
-            "messages": [HumanMessage(content="你好，请简单介绍一下你自己")]
-        }
-        print("Streaming tokens (typewriter style): ", end="", flush=True)
-        async for msg_chunk, metadata in graph.astream(
-            inputs, config=run_config, stream_mode="messages"
-        ):
-            if getattr(msg_chunk, "content", None):
-                print(msg_chunk.content, end="", flush=True)
-        print("\nDone.")
-
-
-if __name__ == "__main__":
-    run_demo()

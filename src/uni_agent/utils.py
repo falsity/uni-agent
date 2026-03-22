@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any
 
 from langchain_core.messages import HumanMessage
-from langchain_core.messages.utils import trim_messages
+from langchain_core.messages.utils import trim_messages, count_tokens_approximately
 
 logger = logging.getLogger(__name__)
 
@@ -22,10 +22,11 @@ def truncate_messages_list(msgs: list, max_tokens: int = 12000) -> list:
     return trim_messages(
         msgs,
         max_tokens=max_tokens,
-        token_counter="approximate",
+        token_counter=count_tokens_approximately,
         strategy="last",
         include_system=True,
         start_on="human",
+        end_on=("human", "tool"),
     )
 
 
@@ -46,11 +47,7 @@ def parse_tool_call(tool_call: Any) -> tuple:
 
 def has_tool_calls(msg: Any) -> bool:
     """True if message has non-empty tool_calls (e.g. AIMessage)."""
-    return (
-        hasattr(msg, "tool_calls")
-        and msg.tool_calls
-        and len(msg.tool_calls) > 0
-    )
+    return hasattr(msg, "tool_calls") and msg.tool_calls and len(msg.tool_calls) > 0
 
 
 def tool_result_to_content(result: Any, max_chars: int | None = None) -> str:
@@ -100,6 +97,7 @@ def last_user_content(messages: list) -> str:
 def last_assistant_content(messages: list) -> str:
     """Return content of last AIMessage (for supervisor: detect clarification Q&A)."""
     from langchain_core.messages import AIMessage
+
     for m in reversed(messages):
         if isinstance(m, AIMessage):
             raw = getattr(m, "content", "") or ""
