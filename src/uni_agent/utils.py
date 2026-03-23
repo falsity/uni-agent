@@ -141,7 +141,7 @@ def detect_language(text: str) -> str:
         return "auto"
 
 
-def get_state_from_checkpoint(checkpointer, config: dict) -> dict:
+def get_state_from_checkpoint(checkpointer, config: dict) -> dict | None:
     """Get state from checkpoint by config.
 
     Args:

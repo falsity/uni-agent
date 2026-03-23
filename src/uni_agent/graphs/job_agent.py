@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 from uni_agent.config import (
     CHAT_BASE_URL,
     JOB_PROMPT_MAX_CHARS,
+    MAX_MCP_ITERATIONS,
     OPENAI_API_KEY,
     OPENAI_MODEL,
     SAFE_MESSAGE_TOKENS,
@@ -62,11 +63,19 @@ from uni_agent.utils import (
 logger = logging.getLogger(__name__)
 
 # ===== CONFIGURATION =====
-_model = ChatOpenAI(
-    model=OPENAI_MODEL,
-    base_url=CHAT_BASE_URL,
-    api_key=OPENAI_API_KEY,
-)
+
+
+def _get_model():
+    """Lazy initialization of LLM to avoid import-time connection."""
+    if not hasattr(_get_model, "_model"):
+        _get_model._model = ChatOpenAI(
+            model=OPENAI_MODEL,
+            base_url=CHAT_BASE_URL,
+            api_key=OPENAI_API_KEY,
+        )
+    return _get_model._model
+
+
 _clarify_parser = PydanticOutputParser(pydantic_object=ClarifyJobDetail)
 _retrieval_parser = PydanticOutputParser(pydantic_object=OptimizeRetrievalParams)
 
@@ -155,7 +164,7 @@ def _get_retrieval_params_agentic(
         job_brief=job_brief or "(none)",
         format_instructions=_retrieval_parser.get_format_instructions(),
     )
-    output = _model.invoke(
+    output = _get_model().invoke(
         [HumanMessage(content=prompt_content)], config=config or {}
     )
     try:
@@ -207,10 +216,14 @@ def _get_optimize_job_text(
     jobs = []
     if user_id and store:
         if params.semantic_query and (params.semantic_query or "").strip():
-            jobs = get_jobs_by_search(
-                store, user_id, query=params.semantic_query.strip(), limit=limit,
-                salary_min_filter=salary_min, salary_max_filter=salary_max,
-            )
+            try:
+                jobs = get_jobs_by_search(
+                    store, user_id, query=params.semantic_query.strip(), limit=limit,
+                    salary_min_filter=salary_min, salary_max_filter=salary_max,
+                )
+            except Exception as e:  # pylint: disable=broad-except
+                logger.warning("Semantic search failed, falling back to scalar filter: %s", e)
+                jobs = []
         if not jobs:
             jobs = get_jobs_for_prompt(
                 store, user_id, limit=limit,
@@ -239,7 +252,7 @@ def classify_job_detail(
         messages=truncated,
         format_instructions=_clarify_parser.get_format_instructions(),
     )
-    output = _model.invoke([HumanMessage(content=prompt_content)], config=config)
+    output = _get_model().invoke([HumanMessage(content=prompt_content)], config=config)
     response = _clarify_parser.invoke(output)
     if response.need_clarify:
         return {
@@ -262,7 +275,7 @@ async def _mcp_jobs_tool_call_async(
     mcp_tools = await get_mcp_tools()
     tools = mcp_tools + [job_search_think_tool]
     tool_map = {t.name: t for t in tools}
-    model_with_tools = _model.bind_tools(tools)
+    model_with_tools = _get_model().bind_tools(tools)
 
     messages = state.get("messages", [])
     messages = trim_messages(
@@ -284,7 +297,7 @@ async def _mcp_jobs_tool_call_async(
         _build_mcp_system_messages(job_brief, messages, []), config=config
     )
     all_messages = [response]
-    max_iterations = 10
+    max_iterations = MAX_MCP_ITERATIONS
     iteration = 0
     while has_tool_calls(response) and iteration < max_iterations:
         iteration += 1
@@ -357,11 +370,11 @@ async def _mcp_jobs_tool_call_async(
     }
 
 
-def mcp_jobs_tool_call(
+async def mcp_jobs_tool_call(
     state: JobState, config: RunnableConfig, *, store: BaseStore | None = None
 ) -> dict:
-    """Synchronous wrapper for MCP jobs tool call."""
-    return asyncio.run(_mcp_jobs_tool_call_async(state, config, store=store))
+    """Async node for MCP jobs tool call."""
+    return await _mcp_jobs_tool_call_async(state, config, store=store)
 
 
 def optimize_recommendations(
@@ -378,7 +391,7 @@ def optimize_recommendations(
     if job_brief:
         system += f"\n\nJob brief for context: {job_brief}"
     system += "\n\n---\nJob results (use as source for job listings):\n" + job_text
-    response = _model.invoke(
+    response = _get_model().invoke(
         [SystemMessage(content=system)] + messages, config=config
     )
     return {"messages": [response]}

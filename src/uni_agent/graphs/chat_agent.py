@@ -49,12 +49,18 @@ logger = logging.getLogger(__name__)
 
 # ===== CONFIGURATION =====
 _tools = [tavily_search, job_search_think_tool, get_current_datetime]
-_model = ChatOpenAI(
-    model=OPENAI_MODEL,
-    base_url=CHAT_BASE_URL,
-    api_key=OPENAI_API_KEY,
-)
 _tool_map = {t.name: t for t in _tools}
+
+
+def _get_model():
+    """Lazy initialization of LLM to avoid import-time connection."""
+    if not hasattr(_get_model, "_model"):
+        _get_model._model = ChatOpenAI(
+            model=OPENAI_MODEL,
+            base_url=CHAT_BASE_URL,
+            api_key=OPENAI_API_KEY,
+        )
+    return _get_model._model
 
 
 def _build_rag_context(store: BaseStore | None, user_id: str | None, query: str) -> str:
@@ -78,7 +84,7 @@ def _llm_call(
     user_id = config_user_id(config)
 
     full_messages = get_messages_from_mem0(messages, user_id)
-    model_with_tools = _model.bind_tools(_tools)
+    model_with_tools = _get_model().bind_tools(_tools)
     response = model_with_tools.invoke(full_messages, config=config)
     return {"messages": [response]}
 
@@ -198,5 +204,13 @@ def build_chat_agent(
     return builder.compile(store=store, checkpointer=checkpointer)
 
 
+def _get_chat_agent():
+    """Lazy-loaded default chat_agent instance for backward compatibility."""
+    if not hasattr(_get_chat_agent, "_chat_agent"):
+        _get_chat_agent._chat_agent = build_chat_agent(store=None)
+    return _get_chat_agent._chat_agent
+
+
 # Default no-store, no-checkpointer graph for backward compat (e.g. tests)
-chat_agent: CompiledStateGraph = build_chat_agent(store=None)
+# Note: Changed from module-level instance to lazy-loaded to avoid import-time side effects
+chat_agent: CompiledStateGraph = None  # type: ignore
