@@ -33,6 +33,10 @@ EMBED_DIMS = int(os.environ.get("EMBED_DIMS", "1024"))
 # Limits
 JOB_PROMPT_MAX_CHARS = 28_000
 MAX_MCP_ITERATIONS = int(os.environ.get("MAX_MCP_ITERATIONS", "10"))
+# MCP tool-calling loop: conversation tail for the model (not job brief; brief is built separately).
+MCP_JOB_CONTEXT_TOKENS = int(os.environ.get("MCP_JOB_CONTEXT_TOKENS", "6000"))
+# Concatenated HumanMessage text cap for persistent job brief (multi-turn city/role/salary).
+MCP_JOB_BRIEF_MAX_CHARS = int(os.environ.get("MCP_JOB_BRIEF_MAX_CHARS", "12000"))
 MODEL_MAX_CONTEXT = int(os.environ.get("MODEL_MAX_CONTEXT", "40960"))
 SAFE_MESSAGE_TOKENS = min(12_000, MODEL_MAX_CONTEXT // 3)
 TOOL_RESULT_MAX_CHARS = 6_000
@@ -43,6 +47,18 @@ TIMEOUT_SECONDS = int(os.environ.get("AGENT_TIMEOUT_SECONDS", "180"))
 # Mem0: cross-session user memory (set MEM0_DISABLED=1 to disable)
 MEM0_DISABLED = os.environ.get("MEM0_DISABLED", "").strip().lower() in ("1", "true", "yes")
 MEM0_SEARCH_LIMIT = int(os.environ.get("MEM0_SEARCH_LIMIT", "8"))
+
+# Mem0 runtime patches (see mem0_adapter): default on; set to 0/false to disable
+def _mem0_patch_flag(name: str, default: bool = True) -> bool:
+    """1/true/yes -> True; 0/false/no/off -> False; unset or empty -> default."""
+    v = os.environ.get(name)
+    if v is None or not str(v).strip():
+        return default
+    return str(v).strip().lower() in ("1", "true", "yes")
+
+
+MEM0_PATCH_EMBEDDER_NO_DIMS = _mem0_patch_flag("MEM0_PATCH_EMBEDDER_NO_DIMS", True)
+MEM0_PATCH_LLM_VLLM = _mem0_patch_flag("MEM0_PATCH_LLM_VLLM", True)
 
 # Mem0 uses .env: EMBED_MODEL, EMBED_DIMS, OPENAI_MODEL. MEM0_LOCAL=1 (Ollama): MEM0_EMBED_MODEL, MEM0_LLM_MODEL.
 MEM0_LOCAL = os.environ.get("MEM0_LOCAL", "").strip().lower() in ("1", "true", "yes")

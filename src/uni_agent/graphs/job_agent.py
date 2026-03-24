@@ -26,6 +26,8 @@ from uni_agent.config import (
     CHAT_BASE_URL,
     JOB_PROMPT_MAX_CHARS,
     MAX_MCP_ITERATIONS,
+    MCP_JOB_BRIEF_MAX_CHARS,
+    MCP_JOB_CONTEXT_TOKENS,
     OPENAI_API_KEY,
     OPENAI_MODEL,
     SAFE_MESSAGE_TOKENS,
@@ -56,6 +58,7 @@ from uni_agent.utils import (
     config_user_id,
     has_tool_calls,
     last_user_content,
+    message_content_to_str,
     parse_tool_call,
     truncate_messages_list,
 )
@@ -92,6 +95,31 @@ def _truncate_messages_for_prompt(msgs, max_per_msg=600, max_msgs=14):
             s = raw[:max_per_msg] + ("..." if len(raw) > max_per_msg else "")
             out.append(f"{type(m).__name__}: {s}")
     return "\n---\n".join(out)
+
+
+def _build_job_brief_from_messages(messages: list, max_chars: int | None = None) -> str:
+    """Full multi-turn job intent: all HumanMessage contents, capped (head+tail if over limit)."""
+    cap = max_chars if max_chars is not None else MCP_JOB_BRIEF_MAX_CHARS
+    parts: list[str] = []
+    for m in messages:
+        if isinstance(m, HumanMessage):
+            t = message_content_to_str(getattr(m, "content", ""))
+            if t:
+                parts.append(t)
+    text = "\n".join(parts)
+    if len(text) <= cap:
+        return text.strip()
+    head_n = cap // 2
+    tail_n = cap - head_n - 20
+    return (text[:head_n] + "\n...\n" + text[-tail_n:]).strip()
+
+
+def _resolve_job_brief(state: JobState) -> str:
+    """Prefer full history; fall back to checkpointed job_brief."""
+    built = _build_job_brief_from_messages(state.get("messages") or [])
+    if built.strip():
+        return built
+    return (state.get("job_brief") or "").strip()
 
 
 def _build_mcp_system_messages(job_brief: str, messages: list, all_messages: list):
@@ -208,7 +236,7 @@ def _get_optimize_job_text(
 ) -> str:
     """Build job text for optimize_recommendations using agentic RAG."""
     last_user = last_user_content(messages)
-    job_brief = state.get("job_brief") or ""
+    job_brief = _resolve_job_brief(state)
     params = _get_retrieval_params_agentic(last_user or "", job_brief, config=config)
     salary_min = params.salary_min_k
     salary_max = params.salary_max_k
@@ -254,14 +282,17 @@ def classify_job_detail(
     )
     output = _get_model().invoke([HumanMessage(content=prompt_content)], config=config)
     response = _clarify_parser.invoke(output)
+    job_brief = _build_job_brief_from_messages(messages)
     if response.need_clarify:
         return {
             "messages": [AIMessage(content=response.question)],
             "classify_goto": "__end__",
+            "job_brief": job_brief,
         }
     return {
         "messages": [AIMessage(content=response.verification)],
         "classify_goto": "mcp_jobs_tool_call",
+        "job_brief": job_brief,
     }
 
 
@@ -277,21 +308,16 @@ async def _mcp_jobs_tool_call_async(
     tool_map = {t.name: t for t in tools}
     model_with_tools = _get_model().bind_tools(tools)
 
-    messages = state.get("messages", [])
+    messages_full = state.get("messages") or []
+    job_brief = _resolve_job_brief(state)
     messages = trim_messages(
-        state["messages"],
+        messages_full,
         strategy="last",
         token_counter=count_tokens_approximately,
-        max_tokens=128,
+        max_tokens=MCP_JOB_CONTEXT_TOKENS,
         start_on="human",
         end_on=("human", "tool"),
     )
-    job_brief = state.get("job_brief") or ""
-    if not job_brief:
-        for msg in reversed(messages):
-            if hasattr(msg, "content") and isinstance(msg.content, str):
-                job_brief = msg.content
-                break
 
     response = await model_with_tools.ainvoke(
         _build_mcp_system_messages(job_brief, messages, []), config=config
@@ -367,6 +393,7 @@ async def _mcp_jobs_tool_call_async(
         "has_job_results": bool(jobs),
         "mcp_job_results": "[Job results stored in store]" if jobs else "",
         "jobs_stored_count": len(jobs),
+        "job_brief": job_brief,
     }
 
 
@@ -384,7 +411,7 @@ def optimize_recommendations(
     messages = truncate_messages_list(
         state.get("messages", []), max_tokens=SAFE_MESSAGE_TOKENS
     )
-    job_brief = state.get("job_brief") or ""
+    job_brief = _resolve_job_brief(state)
     user_id = config_user_id(config)
     job_text = _get_optimize_job_text(state, store, user_id, messages, config=config)
     system = optimize_recommendations_prompt

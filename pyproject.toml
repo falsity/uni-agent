@@ -28,12 +28,14 @@ test = ["pytest>=8.0.0", "pytest-timeout>=2.3.0"]
 dev = [
     "langgraph-cli[inmem]",
     "ipykernel>=6.0.0",
+    "pytest>=8.0.0",
+    "pytest-timeout>=2.3.0",
+    "langsmith>=0.7.0",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-timeout = 180
-# Exit on first failure; full traceback
+# Exit on first failure; full traceback (enable pytest-timeout in env for timeout=)
 addopts = "-x --tb=long"
 markers = [
     "integration: marks tests that need DB/LLM (deselect with -m 'not integration')",

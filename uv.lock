@@ -2337,6 +2337,9 @@ test = [
 dev = [
     { name = "ipykernel" },
     { name = "langgraph-cli", extra = ["inmem"] },
+    { name = "langsmith" },
+    { name = "pytest" },
+    { name = "pytest-timeout" },
 ]
 
 [package.metadata]
@@ -2361,6 +2364,9 @@ provides-extras = ["test"]
 dev = [
     { name = "ipykernel", specifier = ">=6.0.0" },
     { name = "langgraph-cli", extras = ["inmem"] },
+    { name = "langsmith", specifier = ">=0.7.0" },
+    { name = "pytest", specifier = ">=8.0.0" },
+    { name = "pytest-timeout", specifier = ">=2.3.0" },
 ]
 
 [[package]]

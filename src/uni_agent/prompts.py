@@ -88,17 +88,20 @@ The user has NOT yet received MCP job results in this flow. Route from the last 
 
 Last user message: {last_user_message}
 Previous assistant message (if any): {last_assistant_message}
+{lexical_block}
 
-Rules:
+Priority (read first):
+0) If the user asks to **find, search, or list job postings / roles to apply to** (any phrasing: 搜职位, 找岗位, 相关工作, 招聘, 求职, 投递, 换工作), route="job_search". This includes long messages that mention skills + years of experience + "职位/岗位/工作". Do NOT send these to llm_call just because they say "搜索" — Tavily in llm_call is NOT the MCP job pipeline.
 1) route="job_search" when the user wants **employment**: 找工作, 求职, 招聘岗位, 职位推荐, 投递简历, salary/地点/经验 as hiring filters, OR they answer a prior **job-flow** clarification (地点/岗位/远程等). Short answers like "北京", "远程", "3年经验" after a job clarifying question → job_search.
-2) route="llm_call" when the user wants **non-MCP** help: greetings, thanks, chit-chat, 现在几点, 天气, general "什么是X", OR **web research** that is NOT "find me job postings to apply" (e.g. industry overview, news, learning resources) — even if they say "搜索", if the goal is NOT listing jobs from hiring sites, use llm_call.
+2) route="llm_call" when the user wants **non-MCP** help: greetings, thanks, chit-chat, 现在几点, 天气, general "什么是X", OR **web research with NO job-listing intent** (e.g. industry overview, news, learning resources, technology trends). Only use llm_call when the goal is clearly NOT to obtain hirable job postings from recruitment platforms.
 3) If unsure between job_search and llm_call: if the message is about **applying to / finding concrete job postings** (公司招聘, 岗位, 薪资范围职位) → job_search; if about **information browsing** without hiring listing intent → llm_call.
 
 Negative examples (must NOT be job_search):
-- "搜索一下agent技术最新进展" → llm_call (research, not job listings)
+- "搜索一下agent技术最新进展" → llm_call (technology trends, not job listings)
 - "今天新闻" → llm_call
 
 Positive examples (job_search):
+- "我是一名有3年经验的软件工程师…请帮我搜索一下agent开发相关职位" → job_search
 - "帮我找北京golang后端职位"
 - "应届生想投算法岗"
 - After assistant asked "请问期望城市？" user: "深圳" → job_search
@@ -153,7 +156,12 @@ Match the user's language (Chinese/English). Be concise and directly address the
 search_jobs_agent_prompt_with_mcp = """
 You are a helpful assistant that helps the user search for jobs.
 """ + LANGUAGE_INSTRUCTION + """
-The user will provide a job brief.
+The job brief may span multiple user turns (role, city, experience, salary). Read the ENTIRE brief below.
+
+TOOL / PARAMETER RULES (mcp_search_job and related):
+- Merge ALL constraints from the full brief into each search: keyword = role/domain/topic (e.g. Agent开发, Python), city, workYear, etc. Keep them across turns; do not drop earlier constraints when the user only adds salary or refines pay.
+- Salary expectations (e.g. 20k, 20k-30k, 月薪两万) belong in salary / pay-related fields. Do NOT replace keyword with a bare number like "20k" or use salary text as the only keyword — keyword must stay the job domain or role unless the user explicitly changed the role.
+- If the user only adjusts pay, repeat the previous keyword, city, and experience from the brief together with the new salary filter.
 
 CRITICAL INSTRUCTIONS:
 1. You MUST use the MCP tools (especially mcp_search_job) to search for jobs

@@ -30,6 +30,11 @@ from uni_agent.config import (
 from uni_agent.graphs.chat_agent import build_chat_agent
 from uni_agent.graphs import build_job_agent
 from uni_agent.prompts import supervisor_prompt, supervisor_prompt_no_results
+from uni_agent.supervisor_routing import (
+    format_lexical_hint,
+    preflight_no_results_route,
+    score_supervisor_intent,
+)
 from uni_agent.state import JobState, SupervisorDecision
 from uni_agent.store.store_adapter import get_job_count
 from uni_agent.utils import config_user_id, last_assistant_content, last_user_content
@@ -87,7 +92,6 @@ _CHAT_PATTERNS = (
     "几点", "今天", "明天", "日期", "time", "date", "weather",
 )
 
-
 def _is_simple_chat(text: str) -> bool:
     """Lightweight check if message is a simple greeting/chitchat that doesn't need job routing."""
     if not text:
@@ -119,13 +123,23 @@ def _supervisor_next_node(
     last_user: str,
     last_assistant: str,
     config: RunnableConfig,
+    *,
+    lexical_hint: str = "",
 ) -> str:
     """Return next_agent from supervisor decision (classify_job_detail | optimize_recommendations | llm_call)."""
     model = _get_supervisor_model()
+    lexical_block = ""
+    if lexical_hint:
+        lexical_block = (
+            "\nLexical routing hint (internal, do not quote to user): "
+            + lexical_hint
+            + "\n"
+        )
     if not has_results:
         prompt_content = supervisor_prompt_no_results.format(
             last_user_message=last_user or "(none)",
             last_assistant_message=last_assistant or "(none)",
+            lexical_block=lexical_block,
             format_instructions=supervisor_parser.get_format_instructions(),
         )
         output = model.invoke([HumanMessage(content=prompt_content)], config=config)
@@ -174,15 +188,33 @@ def supervisor(
     if _is_simple_chat(last_user):
         return {"next_agent": "llm_call"}
 
+    # Deterministic route: explicit job-posting search beats supervisor LLM (reduces llm_call misroutes)
     has_results = state.get("has_job_results") or bool(
         (state.get("mcp_job_results") or "").strip()
     )
     user_id = config_user_id(config)
     if not has_results and user_id and store:
         has_results = get_job_count(store, user_id) > 0
+
+    intent_snap = score_supervisor_intent(last_user)
+    if not has_results:
+        pre = preflight_no_results_route(last_user)
+        if pre == "job":
+            return {"next_agent": "classify_job_detail"}
+        if pre == "chat":
+            return {"next_agent": "llm_call"}
+
     if not has_results and _is_clarification_reply(last_assistant, last_user):
         return {"next_agent": "classify_job_detail"}
-    next_node = _supervisor_next_node(has_results, last_user, last_assistant, config)
+
+    hint = format_lexical_hint(intent_snap) if not has_results else ""
+    next_node = _supervisor_next_node(
+        has_results,
+        last_user,
+        last_assistant,
+        config,
+        lexical_hint=hint,
+    )
     return {"next_agent": next_node}
 
 

@@ -15,6 +15,8 @@ from mem0 import Memory
 from uni_agent.config import (
     EMBED_BASE_URL,
     MEM0_DISABLED,
+    MEM0_PATCH_EMBEDDER_NO_DIMS,
+    MEM0_PATCH_LLM_VLLM,
     MEM0_SEARCH_LIMIT,
     get_mem0_config,
 )
@@ -77,9 +79,25 @@ def _patch_mem0_llm_for_vllm(memory_client: Memory) -> None:
             )
 
         def _patched_generate_response(messages, response_format=None, **kwargs):
-            if _is_fact_extraction_call(messages):
+            incoming_rf = response_format
+            is_fact = _is_fact_extraction_call(messages)
+            if is_fact:
                 response_format = None
-            return _original(messages=messages, response_format=response_format, **kwargs)
+            logger.debug(
+                "Mem0 vLLM patch: response_format incoming=%s effective=%s fact_extraction=%s",
+                repr(incoming_rf),
+                repr(response_format),
+                is_fact,
+            )
+            result = _original(messages=messages, response_format=response_format, **kwargs)
+            # Mem0 assumes str; OpenAI-compatible APIs may return message.content=None (empty/refusal/reasoning-only).
+            if result is None:
+                result = ""
+            if isinstance(result, str):
+                logger.debug("Mem0 vLLM patch: LLM response (full, str):\n%s", result)
+            else:
+                logger.debug("Mem0 vLLM patch: LLM response (full): %s", repr(result))
+            return result
 
         _llm.generate_response = _patched_generate_response
         _mem0_llm_patched = True
@@ -101,9 +119,16 @@ def _get_memory_client() -> Memory:
         config = get_mem0_config()
         _memory_client = Memory.from_config(config)
         _memory_available = True
-        _patch_mem0_llm_for_vllm(_memory_client)
-        _patch_mem0_embedder_no_dims(_memory_client)
-        logger.info("Mem0 memory client initialized (cross-session memory enabled).")
+        if MEM0_PATCH_LLM_VLLM:
+            _patch_mem0_llm_for_vllm(_memory_client)
+        if MEM0_PATCH_EMBEDDER_NO_DIMS:
+            _patch_mem0_embedder_no_dims(_memory_client)
+        logger.info(
+            "Mem0 memory client initialized (cross-session memory enabled; "
+            "MEM0_PATCH_LLM_VLLM=%s MEM0_PATCH_EMBEDDER_NO_DIMS=%s).",
+            MEM0_PATCH_LLM_VLLM,
+            MEM0_PATCH_EMBEDDER_NO_DIMS,
+        )
         return _memory_client
     except Exception:  # pylint: disable=broad-except
         logger.exception(
